@@ -1,5 +1,7 @@
 # shut-up-and-scribe
 
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+
 一条命令，把 YouTube / B站 / 本地音视频变成**可直接阅读的对话文本** —— 自动下载、转录、识别说话人、整理输出。
 
 ![logo](./imgs/introduce-img.png)
