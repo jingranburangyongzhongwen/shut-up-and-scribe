@@ -103,7 +103,7 @@ python "<Base directory>/main.py" \
 
 脚本内部执行：
 1. 下载/转换音频（YouTube → WAV 或本地文件转 WAV）
-2. WhisperX 转录（large-v3 模型，自动检测语言与说话人）
+2. WhisperX 转录（large-v3 模型 + pyannote/speaker-diarization-3.1 说话人分离）
 3. SRT → 整理文本（合并同说话人段落，分配【说话人X】标签）
 4. 清理临时文件并报告结果
 

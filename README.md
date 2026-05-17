@@ -33,7 +33,6 @@
 2. **同意模型协议（必做）**：
    必须手动访问以下页面并点击 **"Accept Conditions"**，否则程序无法下载模型：
    *   [pyannote/speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1)
-   *   [pyannote/speaker-diarization-community-1](https://huggingface.co/pyannote/speaker-diarization-community-1)
    *   [pyannote/segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0)
 3. **设置环境变量 `HF_TOKEN`**：
 
@@ -130,7 +129,7 @@ python -c "import faulthandler; faulthandler.enable(); import transformers"
 | 问题 | 解答 |
 |------|------|
 | 转录很慢？ | 首次需下载 ~3GB 模型，长视频可能 10 分钟+ |
-| 说话人识别不准？ | 用 `--names` 手动指定名称 |
+| 说话人识别不准？ | 已默认使用 pyannote/speaker-diarization-3.1 + sentence 分辨率，效果不佳时可用 `--names` 手动指定名称 |
 | 找不到输出文件？ | 搜索 `*-转录文本.txt`，在工作目录下 |
 | 提示缺少依赖？ | 按提示安装，Windows 安装后需重启 Claude Code |
 

@@ -101,7 +101,13 @@ def transcribe_whisperx(audio_file, work_dir, hf_token='', language=''):
         cmd.extend(['--language', language])
     if hf_token:
         cmd.extend(['--hf_token', hf_token])
-    cmd.extend(['--output_format', 'srt', '--output_dir', work_dir])
+    cmd.extend([
+        '--diarize_model', 'pyannote/speaker-diarization-3.1',
+        '--chunk_size', '10',
+        '--segment_resolution', 'sentence',
+        '--speaker_embeddings',
+        '--output_format', 'srt', '--output_dir', work_dir
+    ])
 
     run_cmd(cmd)
     return srt_file
@@ -227,7 +233,7 @@ def main():
         audio_file = convert_audio(args.input, work_dir)
 
     # 2. WhisperX转录
-    print(f"\n-> 步骤2: WhisperX转录（large-v3，自动检测语言与说话人）...")
+    print(f"\n-> 步骤2: WhisperX转录（large-v3 + pyannote/speaker-diarization-3.1）...")
     srt_file = transcribe_whisperx(audio_file, work_dir, hf_token, language=args.language)
 
     # 3. SRT转整理文本
