@@ -9,11 +9,17 @@ import argparse
 PUNCT_MAP_ZH = {",": "，", ".": "。", "?": "？", "!": "！", ":": "："}
 
 
+def _use_zh_punct(lang):
+    """Whisper 可能给出 zh / zh-cn / chinese；仅中文把半角换成全角。"""
+    code = (lang or "").strip().lower().replace("_", "-")
+    return code.startswith("zh") or code in {"chinese", "cmn", "yue"}
+
+
 def reconstruct_from_entities(chunk, entities, lang=""):
     """根据 pipeline 输出重建带标点的文本"""
     result = ""
     last_end = 0
-    punct_map = PUNCT_MAP_ZH if lang.startswith("zh") else {}
+    punct_map = PUNCT_MAP_ZH if _use_zh_punct(lang) else {}
     for ent in entities:
         start = ent["start"]
         end = ent["end"]
@@ -33,7 +39,13 @@ def main():
     parser.add_argument("output", help="输出文件路径")
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--language", default="", help="音频语言（zh/en 等），中文时自动转换标点")
+    parser.add_argument("--models-dir", default="", help="模型缓存目录（默认 skill 目录下 models/）")
     args = parser.parse_args()
+
+    from model_cache import configure_model_cache, default_models_dir, hub_paths
+    models_dir = args.models_dir if args.models_dir else default_models_dir()
+    configure_model_cache(models_dir)
+    paths = hub_paths(models_dir)
 
     with open(args.input, "r", encoding="utf-8") as f:
         text = f.read()
@@ -48,6 +60,7 @@ def main():
         model="oliverguhr/fullstop-punctuation-multilang-large",
         device=device_id,
         aggregation_strategy="simple",
+        cache_dir=paths["hf_hub"],
     )
     print("-> 模型加载完成")
 

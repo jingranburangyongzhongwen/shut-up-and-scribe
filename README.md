@@ -29,11 +29,10 @@
 
 1. **获取 Token**：
    *   注册/登录 [huggingface.co](https://huggingface.co)。
-   *   进入 **Settings → Access Tokens**，创建一个具有 `write` 权限的 token。
+   *   进入 **Settings → Access Tokens**，创建一个具有 `read` 权限的 token。
 2. **同意模型协议（必做）**：
-   必须手动访问以下页面并点击 **"Accept Conditions"**，否则程序无法下载模型：
-   *   [pyannote/speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1)
-   *   [pyannote/segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0)
+   必须手动访问以下页面并点击 **"Accept Conditions"**，否则说话人分离无法下载模型：
+   *   [pyannote/speaker-diarization-community-1](https://huggingface.co/pyannote/speaker-diarization-community-1)（当前默认）
 3. **设置环境变量 `HF_TOKEN`**：
 
 #### **Windows (持久化)**
@@ -79,9 +78,16 @@ D:\<anaconda dir>\Library\bin
 注意，由于库的各种依赖问题，强烈建议每个版本和我在这里写的保持一致，不然需要花较多时间处理问题
 
 ### 4. 安装 Python 包
+说话人分离默认 **pyannote/speaker-diarization-community-1**，调用其 `exclusive_speaker_diarization`。这要求 **whisperx ≥ 3.8** 且 **pyannote.audio ≥ 4**；3.x 的 pyannote 没有该 API，会在转录完成后才崩。请钉死下面跑通版本，不要只写 `pip install whisperx`。
+
+| 包 | 跑通版本 | 最低可用 |
+|------|----------|----------|
+| whisperx | 3.8.5 | 3.8.0（默认模型改为 community-1，`DiarizationPipeline` 支持 `token` / `cache_dir`） |
+| pyannote.audio | 4.0.4 | 4.0.0（`DiarizeOutput.exclusive_speaker_diarization`） |
+
 ```bash
 # 先安装 torch==2.6.0 torchvision==0.21.0 torchaudio==2.6.0 cuda版本视自身情况而定
-pip install yt-dlp whisperx
+pip install yt-dlp "whisperx==3.8.5" "pyannote.audio==4.0.4"
 # 如果是和我一样anaconda，需要额外执行下面命令，不然import transformers会崩溃
 pip uninstall numpy
 pip install "numpy<2.4"
@@ -91,17 +97,40 @@ python -c "import faulthandler; faulthandler.enable(); import transformers"
 ```
 删除 <anaconda dir>/Library/bin/libiomp5md.dlll 避免和torch的omp冲突
 
+启动时 `check_dependencies` 会检查上述版本和 exclusive API，不通过则直接退出，避免先跑完 ASR 再失败。
+
+### 5. 模型存放位置
+
+默认始终使用 **skill 目录下的 `models/`**（已加入 `.gitignore`）。只在这里查找，缺了也下载到这里；**不读取、不搬迁** 你的 `HF_HOME` / `HF_HUB_CACHE` / `TORCH_HOME` / `~/.cache`。首次转录会下载约 **5–8 GB** 权重（Whisper large-v3 约 3GB，其余为对齐和 pyannote community-1 说话人分离）。
+
+门禁模型仍需要环境变量 `HF_TOKEN`（凭证，不是缓存路径）。若权重已经在别的目录，用 `--models-dir` 指过去，或自行拷进 `models/`。
+
+```
+models/
+  huggingface/hub/   Whisper large-v3、pyannote 说话人分离、中文对齐、标点模型
+  torch/hub/         WhisperX 英文对齐（torch.hub）
+```
+
+覆盖路径：`python main.py ... --models-dir D:\other\models`
+
 ## 可选参数
 
 | 参数 | 作用 | 示例 |
 |------|------|------|
-| `--names "A,B"` | 自定义说话人名称 | `--names "主持人,嘉宾"` |
-| `--language zh` | 指定音频语言（运行时会自动询问） | `--language zh` |
+| `--names "A,B"` | 自定义说话人名称（按首次出场顺序；片头垫话也会占一个名额） | `--names "主持人,嘉宾"` |
+| `--language zh` | 指定音频语言（默认自动检测，不必填） | `--language zh` |
 | `--punctuate` | 使用 transformers pipeline 恢复标点 | `xxx --punctuate` |
 | `--proofread` | LLM 校对标点和错别字 | `xxx --proofread` |
-| `--cleanup` | 完成后删除临时文件 | `xxx --cleanup` |
+| `--cleanup` | 删除 wav/srt/json 等临时文件，不删用户输入和成稿 | `xxx --cleanup` |
+| `--force` | 忽略已有 SRT，强制重新转录 | 升级流水线后请加此项 |
+| `--no-hotwords` | 关闭从标题/简介/标签/章节抽取的热词 | `xxx --no-hotwords` |
+| `--hotwords "..."` | 覆盖自动热词（本地文件无标题时用这个） | `--hotwords "SGLang KV Cache"` |
+| `--models-dir` | 模型缓存目录 | 默认 skill 目录下 `models/` |
+| `--batch-size N` | Whisper 批大小（默认 8，约 8GB 显存） | `--batch-size 4` |
+| `--no-exclusive-diarize` | 改用 overlapping 说话人分离 | 默认 exclusive |
+| `--work-dir` | 工作目录（默认当前目录） | `--work-dir D:\out` |
 
-运行时会自动弹出语言选择：中文/英文/自动检测。
+运行时默认自动检测语言、自动估计说话人数，无需交互。
 
 ## 输出效果
 
@@ -128,13 +157,15 @@ python -c "import faulthandler; faulthandler.enable(); import transformers"
 
 | 问题 | 解答 |
 |------|------|
-| 转录很慢？ | 首次需下载 ~3GB 模型，长视频可能 10 分钟+ |
-| 说话人识别不准？ | 已默认使用 pyannote/speaker-diarization-3.1 + sentence 分辨率，效果不佳时可用 `--names` 手动指定名称 |
+| 转录很慢？ | 首次需下载约 5–8 GB 模型到 `models/`（其中 Whisper large-v3 约 3GB），长视频可能 10 分钟+ |
+| 说话人识别不准？ | 已默认 pyannote/speaker-diarization-community-1，人数自动估计；效果不佳时可用 `--names` 指定名称 |
+| 升级后文本还是旧的？ | 工作目录里已有同名 `.srt` 会跳过转录；加 `--force` 强制重转 |
 | 找不到输出文件？ | 搜索 `*-转录文本.txt`，在工作目录下 |
 | 提示缺少依赖？ | 按提示安装，Windows 安装后需重启 Claude Code |
+| 说话人分离报 `exclusive_speaker_diarization` / `DiarizeOutput`？ | pyannote.audio 仍是 3.x，或 whisperx 低于 3.8。按上面表格安装 `whisperx==3.8.5` 和 `pyannote.audio==4.0.4` |
 
 ## 注意事项
 
 - HF Token 是敏感信息，勿提交到公开仓库
-- 临时文件默认保留，`--cleanup` 可自动清理
+- 临时文件默认保留；`--cleanup` 会删 wav/srt/json 等中间文件，不会删你指定的输入文件和 `*-转录文本.txt`
 - 仅用于个人学习/研究，请遵守版权规定

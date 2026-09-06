@@ -53,38 +53,91 @@ def parse_srt(srt_file):
 
         text = ' '.join(text_lines).strip()
         if text:
+            start_ts, end_ts = [x.strip() for x in time_line.split('-->')]
+            end_ts = end_ts.split()[0]
             segments.append({
                 'speaker': speaker,
                 'text': text,
-                'time': time_line.strip()
+                'time': time_line.strip(),
+                'start': parse_timestamp(start_ts),
+                'end': parse_timestamp(end_ts),
             })
 
     return segments
 
 
-def detect_speakers(segments):
-    """
-    检测说话人并分配通用标签：
-    - 按出现顺序分配【说话人1】、【说话人2】等
-    """
-    speaker_ids = []
+def parse_transcript_json(json_file):
+    """读取引擎写出的 compact JSON（保留英文词间空格）。"""
+    import json
+    with open(json_file, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+    segments = []
+    for seg in data.get('segments') or []:
+        text = (seg.get('text') or '').strip()
+        if not text:
+            continue
+        start = float(seg.get('start') or 0)
+        end = float(seg.get('end') or start)
+        segments.append({
+            'speaker': seg.get('speaker'),
+            'text': text,
+            'start': start,
+            'end': end,
+            'time': f"{start:.3f} --> {end:.3f}",
+        })
+    return segments
 
-    # 收集所有说话人ID（按出现顺序）
+
+def parse_timestamp(ts):
+    """SRT 时间戳 → 秒。允许没有毫秒。"""
+    ts = ts.strip().split()[0]
+    h, m, rest = ts.split(':')
+    if '.' in rest or ',' in rest:
+        sec_s, frac = rest.replace(',', '.').split('.', 1)
+        frac_val = int(frac) / (10 ** len(frac)) if frac else 0.0
+    else:
+        sec_s, frac_val = rest, 0.0
+    return int(h) * 3600 + int(m) * 60 + int(sec_s) + frac_val
+
+
+def speakers_by_appearance(segments):
+    """按首次出场顺序收集说话人 ID。"""
+    speaker_ids = []
     for seg in segments:
         sp = seg['speaker']
         if sp and sp not in speaker_ids:
             speaker_ids.append(sp)
+    return speaker_ids
 
-    # 按出现顺序分配通用标签
+
+def detect_speakers(segments):
+    """未指定 --names 时：按首次出场顺序分配【说话人1】、【说话人2】。"""
+    return map_custom_names(segments, [])
+
+
+def map_custom_names(segments, name_list):
+    """按首次出场顺序对应名称。
+
+    名单不够的说话人回退为【说话人N】（仍按出场顺序编号）。
+    """
     speaker_map = {}
-    for idx, sp in enumerate(speaker_ids):
-        speaker_map[sp] = f'说话人{idx + 1}'
-
+    for i, sp in enumerate(speakers_by_appearance(segments)):
+        speaker_map[sp] = name_list[i] if i < len(name_list) else f'说话人{i + 1}'
     return speaker_map
 
 
-def merge_segments(segments, speaker_map):
-    """合并同一说话人的连续段落"""
+# 同一说话人、停顿短、字数未超限才粘在一起；默认按「可读段落」而不是「整人一块」。
+DEFAULT_MAX_PAUSE = 0.75
+DEFAULT_MAX_CHARS = 180
+
+
+def merge_segments(segments, speaker_map, max_pause=DEFAULT_MAX_PAUSE, max_chars=DEFAULT_MAX_CHARS):
+    """合并同一说话人的连续段落。
+
+    连续同说话人且间隙 <= max_pause、合并后不超过 max_chars 才粘连。
+    说话人标签可以连续相同，避免主持人十分钟合成一块。
+    传 max_pause=1e9, max_chars=10**9 可恢复旧的「按人粘」行为。
+    """
     if not segments:
         return []
 
@@ -94,15 +147,23 @@ def merge_segments(segments, speaker_map):
     for seg in segments:
         sp = seg['speaker']
         role = speaker_map.get(sp, '未知')
+        start = float(seg['start']) if 'start' in seg else 0.0
+        end = float(seg['end']) if 'end' in seg else start
+        text = seg['text']
 
         if current is None:
-            current = {'role': role, 'text': seg['text']}
-        elif current['role'] == role:
-            # 同一说话人，合并
-            current['text'] += ' ' + seg['text']
+            current = {'role': role, 'text': text, 'start': start, 'end': end}
+            continue
+
+        gap = start - current['end']
+        same = current['role'] == role
+        would = len(current['text']) + 1 + len(text)
+        if same and gap <= max_pause and would <= max_chars:
+            current['text'] += ' ' + text
+            current['end'] = end
         else:
             merged.append(current)
-            current = {'role': role, 'text': seg['text']}
+            current = {'role': role, 'text': text, 'start': start, 'end': end}
 
     if current:
         merged.append(current)
@@ -111,11 +172,13 @@ def merge_segments(segments, speaker_map):
 
 
 def clean_text(text):
-    """去除 WhisperX 逐字空格输出格式，还原正常文本"""
-    # WhisperX 对中英文都是逐字加空格："大 家 看" / "h e l l o"
-    # 判断方式：中文字后紧跟空格，或连续多个单字母后跟空格
-    if re.search(r'[一-鿿] ', text) or re.search(r'(?:^| )\S (?:\S ){2,}', text):
-        text = text.replace(' ', '')
+    """去掉中文词间空格，保留英文单词空格，并在中英边界补空格。"""
+    text = re.sub(r'(?<=[\u4e00-\u9fff])\s+(?=[\u4e00-\u9fff])', '', text)
+    text = re.sub(r'(?<=[\u4e00-\u9fff])\s+(?=[\u3000-\u303f\uff00-\uffef])', '', text)
+    text = re.sub(r'(?<=[\u3000-\u303f\uff00-\uffef])\s+(?=[\u4e00-\u9fff])', '', text)
+    text = re.sub(r'([\u4e00-\u9fff])([A-Za-z0-9])', r'\1 \2', text)
+    text = re.sub(r'([A-Za-z0-9])([\u4e00-\u9fff])', r'\1 \2', text)
+    text = re.sub(r'[ \t]+', ' ', text)
     return text.strip()
 
 
@@ -165,8 +228,15 @@ def main():
     convert_parser = subparsers.add_parser('convert', help='SRT 转整理文本')
     convert_parser.add_argument('srt_file', help='输入 SRT 文件')
     convert_parser.add_argument('output_file', help='输出文本文件')
-    convert_parser.add_argument('--names', help='自定义说话人名称，逗号分隔（如：小珺,江泽元）')
+    convert_parser.add_argument(
+        '--names',
+        help='自定义说话人名称，逗号分隔，按首次出场顺序对应（如：主持人,嘉宾）',
+    )
     convert_parser.add_argument('--source', default='', help='来源信息（URL 或文件路径）')
+    convert_parser.add_argument('--max-pause', type=float, default=DEFAULT_MAX_PAUSE,
+                                help='同说话人合并的最大停顿秒数（默认 0.75）')
+    convert_parser.add_argument('--max-chars', type=int, default=DEFAULT_MAX_CHARS,
+                                help='单段最大字符数，超出则另起一段（默认 180）')
     split_parser = subparsers.add_parser('split', help='将转录文本拆分为 chunk')
     split_parser.add_argument('input_file', help='输入转录文本文件')
     split_parser.add_argument('--max-chars', type=int, default=5000, help='每个 chunk 最大字符数（默认 5000）')
@@ -181,11 +251,15 @@ def main():
     if args.command == 'convert':
         srt_file = args.srt_file
         if not os.path.isfile(srt_file):
-            print(f"错误：找不到 SRT 文件: {srt_file}")
+            print(f"错误：找不到输入文件: {srt_file}")
             sys.exit(1)
 
-        print(f"读取 SRT 文件: {srt_file}")
-        segments = parse_srt(srt_file)
+        if srt_file.lower().endswith('.json'):
+            print(f"读取 JSON 文件: {srt_file}")
+            segments = parse_transcript_json(srt_file)
+        else:
+            print(f"读取 SRT 文件: {srt_file}")
+            segments = parse_srt(srt_file)
         print(f"共解析段落数: {len(segments)}")
 
         if not segments:
@@ -198,28 +272,19 @@ def main():
         source = args.source
 
         if names:
-            # 用户自定义名称
-            name_list = [n.strip() for n in names.split(',')]
-            speaker_ids = []
-            for seg in segments:
-                sp = seg['speaker']
-                if sp and sp not in speaker_ids:
-                    speaker_ids.append(sp)
-            for i, sp in enumerate(speaker_ids):
-                if i < len(name_list):
-                    speaker_map[sp] = name_list[i]
-                else:
-                    speaker_map[sp] = f'说话人{i+1}'
-            print(f"自定义说话人名称: {speaker_map}")
+            name_list = [n.strip() for n in names.split(',') if n.strip()]
+            speaker_map = map_custom_names(segments, name_list)
+            print(f"自定义说话人名称（按出场顺序）: {speaker_map}")
         else:
-            # 自动检测
-            print("自动检测说话人角色...")
             speaker_map = detect_speakers(segments)
-            print(f"说话人映射: {speaker_map}")
+            print(f"说话人映射（按出场顺序）: {speaker_map}")
 
-        # 合并段落
+        # 合并段落（短停顿才粘，避免整人一块）
         print("合并同说话人段落...")
-        merged = merge_segments(segments, speaker_map)
+        merged = merge_segments(
+            segments, speaker_map,
+            max_pause=args.max_pause, max_chars=args.max_chars,
+        )
         print(f"合并后对话条数: {len(merged)}")
 
         # 生成输出
